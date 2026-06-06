@@ -6,13 +6,14 @@
 # shellcheck disable=SC2043
 
 ROOTDIR="$PWD"
-WORKFLOW_DIR=$(CDPATH='' cd -P -- "$(dirname -- "$0")/../.." && pwd)
 ARTIFACTS_DIR="$ROOTDIR/artifacts"
 
 # shellcheck disable=SC1091
-. "$WORKFLOW_DIR/.ci/common/project.sh"
+. "$ROOTDIR/.ci/common/project.sh"
 
 mkdir -p "$ARTIFACTS_DIR"
+
+rm -f eden.zip
 
 find "$ROOTDIR" \( \
 	    -name '*.deb' -o \
@@ -22,8 +23,24 @@ find "$ROOTDIR" \( \
 		-name '*.tar.zst' -o \
 		-name '*.apk' -o \
 		-name '*.tar.gz' -o \
-		-name '*unknown-linux-musl*' \
-    \) -exec cp {} "$ARTIFACTS_DIR" \;
+		-name '*unknown-linux-musl*' -o \
+		-name '*.dmg' \
+    \) -not -path "*artifacts*" -exec cp {} "$ARTIFACTS_DIR" \;
+
+if [ "$DEVEL" = false ]; then
+	if command -v apt-get >/dev/null 2>&1; then
+		sudo apt-get install -y mktorrent
+	fi
+	files_dir="${PROJECT_PRETTYNAME}-${GITHUB_TAG}"
+	ln -sf "$ARTIFACTS_DIR" "${files_dir}"
+	mktorrent -pv \
+		-a udp://tracker.opentrackr.org:1337/announce \
+		-w "https://$B2_PUBLIC_URL/" \
+		-o "$ARTIFACTS_DIR/${PROJECT_PRETTYNAME}-${ARTIFACT_REF}.torrent" \
+		-n "${GITHUB_TAG}" \
+		-l 20 \
+		"${files_dir}/"
+fi
 
 sudo apt-get install -y mktorrent
 mktorrent -p -o "$ARTIFACTS_DIR/${PROJECT_PRETTYNAME}-${ARTIFACT_REF}.torrent" "$ARTIFACTS_DIR/"

@@ -3,48 +3,51 @@
 # SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-SDL_FLAGS=(-DYUZU_USE_BUNDLED_SDL2=ON)
+SDL_FLAGS=(
+	-DYUZU_USE_BUNDLED_SDL3=ON
+	-DYUZU_USE_BUNDLED_SDL2=ON
+)
+
+OPENSSL=bundled
 
 # only clang and gcc support this
-if [ -n "$SUPPORTS_TARGETS" ]; then
+if [ "$PLATFORM" = win ]; then
+	OPENSSL=bundled
+elif [ -n "$SUPPORTS_TARGETS" ]; then
 	case "$TARGET" in
+		legacy)
+			echo "Making amd64 generic build of ${PROJECT_PRETTYNAME}"
+			ARCH_FLAGS="-march=x86-64 -mtune=generic"
+			ARCH=legacy
+			OPENSSL=bundled
+			;;
 		amd64)
 			echo "Making amd64-v3 optimized build of ${PROJECT_PRETTYNAME}"
 			ARCH_FLAGS="-march=x86-64-v3 -mtune=generic"
 			ARCH="amd64"
+			BUILD_TARGET=amd64
 			;;
 		steamdeck|zen2)
 			echo "Making Steam Deck (Zen 2) optimized build of ${PROJECT_PRETTYNAME}"
 			ARCH_FLAGS="-march=znver2 -mtune=znver2"
 			ARCH="steamdeck"
-			STEAMDECK=true
 			;;
 		rog-ally|allyx|zen4)
 			echo "Making ROG Ally X (Zen 4) optimized build of ${PROJECT_PRETTYNAME}"
 			ARCH_FLAGS="-march=znver4 -mtune=znver4"
 			ARCH="rog-ally-x"
-			STEAMDECK=true
-			;;
-		legacy)
-			echo "Making amd64 generic build of ${PROJECT_PRETTYNAME}"
-			ARCH_FLAGS="-march=x86-64 -mtune=generic"
-			ARCH=legacy
+			BUILD_TARGET=rog-ally
 			;;
 		aarch64|arm64)
 			echo "Making armv8-a build of ${PROJECT_PRETTYNAME}"
 			ARCH_FLAGS="-march=armv8-a -mtune=generic"
 			ARCH=aarch64
+			OPENSSL=bundled
 			;;
 		armv9)
 			echo "Making armv9-a build of ${PROJECT_PRETTYNAME}"
 			ARCH_FLAGS="-march=armv9-a -mtune=generic"
 			ARCH=armv9
-			;;
-		native)
-			echo "Making native build of ${PROJECT_PRETTYNAME}"
-			ARCH_FLAGS="-march=native -mtune=native"
-			FFMPEG=OFF
-			OPENSSL=OFF
 			;;
 		# Special target: package-{amd64,aarch64}
 		# In the "package" target we WANT standalone executables
@@ -55,8 +58,8 @@ if [ -n "$SUPPORTS_TARGETS" ]; then
 			STANDALONE=ON
 			PACKAGE=true
 			FFMPEG=OFF
-			OPENSSL=OFF
-
+			OPENSSL=system
+			UPDATES=ON
 			;;
 		package-aarch64)
 			echo "Making package-friendly aarch64 build of ${PROJECT_PRETTYNAME}"
@@ -64,13 +67,20 @@ if [ -n "$SUPPORTS_TARGETS" ]; then
 			STANDALONE=ON
 			PACKAGE=true
 			FFMPEG=OFF
-			OPENSSL=OFF
+			OPENSSL=system
+			UPDATES=ON
 
 			# apparently gcc-arm64 on ubuntu dislikes lto
 			LTO=OFF
 			;;
+		m1|apple)
+			echo "Making Apple M1 build of ${PROJECT_PRETTYNAME}"
+			ARCH_FLAGS="-mcpu=apple-m1"
+			ARCH=m1
+			OPENSSL=bundled
+			;;
 		*)
-			echo "Invalid target $TARGET specified, must be one of: native, amd64, steamdeck, zen2, allyx, rog-ally, zen4, legacy, aarch64, armv9"
+			echo "Invalid target $TARGET specified"
 			exit 1
 			;;
 	esac
@@ -86,14 +96,13 @@ if [ -n "$SUPPORTS_TARGETS" ]; then
 
 		PROFDATA="$PWD/${PROJECT_REPO}.profdata"
 		[ -f "$PROFDATA" ] && rm -f "$PROFDATA"
-		curl -L https://"$RELEASE_PGO_HOST"/"$RELEASE_PGO_REPO/releases/latest/download/${PROJECT_REPO}.profdata" > "$PROFDATA"
+		curl -fL https://"$RELEASE_PGO_HOST"/"$RELEASE_PGO_REPO/releases/latest/download/${PROJECT_REPO}.profdata" > "$PROFDATA"
 		[ ! -f "$PROFDATA" ] && (echo "PGO data failed to download" ; exit 1)
 		command -v cygpath >/dev/null 2>&1 && PROFDATA="$(cygpath -m "$PROFDATA")"
 		ARCH_FLAGS="${ARCH_FLAGS} -fprofile-use=$PROFDATA -Wno-backend-plugin -Wno-profile-instr-unprofiled -Wno-profile-instr-out-of-date"
 	fi
 fi
 
-# Steamdeck targets need older sdl2
 if [ "$STEAMDECK" = "true" ]; then
 	SDL_FLAGS=(
 		-DYUZU_SYSTEM_PROFILE=steamdeck
@@ -101,12 +110,20 @@ if [ "$STEAMDECK" = "true" ]; then
 	)
 fi
 
-# Package targets use system sdl2
+# Package targets should use system sdl3
+# Mostly to test comp
 if [ "$PACKAGE" = "true" ]; then
-	SDL_FLAGS=(-DYUZU_USE_BUNDLED_SDL2=OFF)
+	SDL_FLAGS=(-DYUZU_USE_BUNDLED_SDL3=OFF)
 fi
 
 [ -n "$ARCH_FLAGS" ] && ARCH_CMAKE+=(-DCMAKE_C_FLAGS="${ARCH_FLAGS}" -DCMAKE_CXX_FLAGS="${ARCH_FLAGS}")
+
+# TODO: External OpenSSL is broken on the Linux runner
+case "$OPENSSL" in
+	system) ARCH_CMAKE+=(-DYUZU_USE_BUNDLED_OPENSSL=OFF -DOpenSSL_FORCE_SYSTEM=ON) ;;
+	bundled) ARCH_CMAKE+=(-DYUZU_USE_BUNDLED_OPENSSL=ON) ;;
+	external) ARCH_CMAKE+=(-DYUZU_USE_BUNDLED_OPENSSL=OFF -DOpenSSL_FORCE_BUNDLED=ON) ;;
+esac
 
 export ARCH_CMAKE
 export SDL_FLAGS
@@ -116,3 +133,5 @@ export OPENSSL
 export FFMPEG
 export LTO
 export CCACHE
+export UPDATES
+export BUILD_TARGET

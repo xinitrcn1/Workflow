@@ -16,7 +16,7 @@ env:
   DISABLE_ARM: ${{ vars.DISABLE_ARM }}
   SCCACHE_GHA_ENABLED: "true"
   CCACHE: "true"
-  CPM_CACHE_VERSION: "v17"
+  CPM_CACHE_VERSION: "v20"
   FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
   DEVEL: ${{ inputs.devel }}
   BUILD_ID: ${{ inputs.build-id }}
@@ -28,12 +28,12 @@ jobs:
     outputs:
       cachever: ${{ steps.out.outputs.cachever }}
       pgo: ${{ steps.out.outputs.pgo }}
-    name: "Parse and Clone"
+    name: Parse and Clone
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -59,14 +59,15 @@ jobs:
       # Clone step is still changing forgejo.env, due to a bug on Forgejo, send after it
       # <https://codeberg.org/forgejo/forgejo/issues/9601>
       - name: Upload payload environment
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7
         with:
-          name: forgejo-env
+          name: forgejo.env
+          archive: false
           path: forgejo.env
 
       - name: Send pending status
         if: ${{ (inputs.build-id) == 'master' || (inputs.build-id) == 'pull_request' }}
-        run: python3 .ci/common/status.py --pending
+        run: python3 ./.ci/common/status.py --pending
 
       - name: Apply Temporary Patch
         if: ${{ env.TEMP_PATCH_NUMBER != '' }}
@@ -84,7 +85,7 @@ jobs:
           rm -rf eden/.git* eden/.ci eden/.github
 
       - name: Upload cloned repo
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7
         with:
           name: eden
           include-hidden-files: true
@@ -92,45 +93,58 @@ jobs:
             eden/*
             eden/.patch
 
+      - name: Upload nightly changelog
+        if: ${{ inputs.build-id == 'nightly' }}
+        uses: actions/upload-artifact@v7
+        with:
+          path: nightly-changelog.md
+          name: nightly-changelog.md
+          archive: false
+
   source:
-    name: "Source Pack"
+    if: ${{ inputs.build-id == 'pull_request' }}
+    name: Source Pack
     runs-on: ubuntu-latest
     needs: [clone]
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6
 
-      - name: Clone
-        uses: actions/download-artifact@v7.0.0
+      - name: Download Forgejo environment
+        uses: actions/download-artifact@v8
+        with:
+          name: forgejo.env
 
       - name: Load payload environment
-        run: FORGEJO_LENV=forgejo-env/forgejo.env . .ci/fj/load-env.sh
+        shell: bash
+        run: . ./.ci/fj/load-env.sh
+
+      - name: Clone
+        uses: actions/download-artifact@v8
+        with:
+          name: eden
+
+      - name: Load payload environment
+        run: . ./.ci/fj/load-env.sh
 
       - name: Build
         run: ./.ci/source/build.sh
 
-      - name: Package
-        run: ./.ci/source/package.sh
-
-      - name: Upload source
-        uses: actions/upload-artifact@v6.0.0
-        with:
-          name: source
-          path: ./*.tar.zst
-
   deb:
-    name: ".deb builds"
+    if: ${{ inputs.build-id == 'pull_request' || inputs.build-id == 'test' }}
+    name: Debian
     needs: [clone]
     uses: ./.github/workflows/debian.yml
     with:
       build-id: '${{ inputs.build-id }}'
       cpm-cache-version: '${{ needs.clone.outputs.cachever }}'
       devel: ${{ inputs.devel }}
+      debian-version: 13
     secrets: inherit
 
   linux:
-    name: "AppImage"
+    name: AppImage
     needs: [clone]
     uses: ./.github/workflows/appimage.yml
     with:
@@ -141,7 +155,7 @@ jobs:
     secrets: inherit
 
   windows:
-    name: "Windows"
+    name: Windows
     needs: [clone]
     uses: ./.github/workflows/windows.yml
     with:
@@ -151,19 +165,8 @@ jobs:
       force_pgo: ${{ needs.clone.outputs.pgo }}
     secrets: inherit
 
-  msys:
-    name: "MinGW"
-    needs: [clone]
-    uses: ./.github/workflows/msys.yml
-    with:
-      build-id: '${{ inputs.build-id }}'
-      cpm-cache-version: '${{ needs.clone.outputs.cachever }}'
-      devel: ${{ inputs.devel }}
-      force_pgo: ${{ needs.clone.outputs.pgo }}
-    secrets: inherit
-
   android:
-    name: "Android"
+    name: Android
     needs: [clone]
     uses: ./.github/workflows/android.yml
     with:
@@ -173,7 +176,7 @@ jobs:
     secrets: inherit
 
   macos:
-    name: "macOS"
+    name: macOS
     needs: [clone]
     uses: ./.github/workflows/macos.yml
     with:
@@ -182,17 +185,10 @@ jobs:
       devel: ${{ inputs.devel }}
     secrets: inherit
 
-  freebsd:
-    name: "FreeBSD"
-    needs: [clone]
-    uses: ./.github/workflows/freebsd.yml
-    with:
-      build-id: '${{ inputs.build-id }}'
-      cpm-cache-version: '${{ needs.clone.outputs.cachever }}'
-      devel: ${{ inputs.devel }}
-    secrets: inherit
-
   room:
-    name: "musl room"
+    if: ${{ inputs.build-id == 'pull_request' || inputs.build-id == 'tag' || inputs.build-id == 'test' }}
+    name: musl room
     needs: [clone]
     uses: ./.github/workflows/room.yml
+    with:
+      build-id: ${{ inputs.build-id }}

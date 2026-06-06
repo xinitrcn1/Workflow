@@ -7,24 +7,32 @@
 
 # shellcheck disable=SC1091
 
-WORKFLOW_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-. "$WORKFLOW_DIR/.ci/common/project.sh"
+ROOTDIR="$PWD"
+. "$ROOTDIR/.ci/common/project.sh"
 
 FORGEJO_LENV=${FORGEJO_LENV:-"forgejo.env"}
 touch "$FORGEJO_LENV"
 
-_release_field() {
-	build_id="$1"
-	field="$2"
+_field() {
+	json="$1"
+	build_id="$2"
+	field="$3"
 
 	jq -r --arg id "$build_id" \
 		--arg field "$field" \
-		'.[] | select(.["build-id"] == $id) | .[$field]' "$RELEASE_JSON"
+		'.[] | select(.["build-id"] == $id) | .[$field]' "$json"
+}
+
+b2_field() {
+	_field "$ROOTDIR"/.ci/b2.json "$1" "$2"
+}
+
+fj_field() {
+	_field "$ROOTDIR"/.ci/fj.json "$1" "$2"
 }
 
 parse_payload() {
-	DEFAULT_JSON=".ci/default.json"
-	RELEASE_JSON=".ci/release.json"
+	DEFAULT_JSON="$ROOTDIR/.ci/default.json"
 	PAYLOAD_JSON="payload.json"
 
 	if [ ! -f "$PAYLOAD_JSON" ]; then
@@ -39,29 +47,32 @@ parse_payload() {
 		exit 1
 	fi
 
-	# release.json defines targets for upload releases
-	if [ ! -f "$RELEASE_JSON" ]; then
-		echo "Error: $RELEASE_JSON not found!"
-		echo
-		echo "You should set: 'build-id', 'host' and 'repository' on $RELEASE_JSON"
-		exit 1
+	# hosts / repos
+	RELEASE_PGO_HOST=github.com
+	RELEASE_PGO_REPO=Eden-CI/PGO
+
+	# B2 and Forgejo
+	# shellcheck disable=SC2153
+	case "$BUILD_ID" in
+		test|push) _build=master ;;
+		*) _build="$BUILD_ID" ;;
+	esac
+
+	B2_BUCKET=$(b2_field "$_build" bucket)
+	B2_DIR=$(b2_field "$_build" directory)
+	B2_URL=$(b2_field "$_build" url)
+	B2_PUBLIC_URL=$(b2_field "$_build" public)
+
+	if [ "$B2_DIR" = "null" ]; then
+		B2_DIR=""
 	fi
 
-	# hosts / repos
-	RELEASE_PGO_HOST=$(_release_field "pgo" "host")
-	RELEASE_PGO_REPO=$(_release_field "pgo" "repository")
+	RELEASE_HOST=$(fj_field "$_build" host)
+	RELEASE_REPO=$(fj_field "$_build" repo)
+	RELEASE_B2=$(fj_field "$_build" b2)
 
-	RELEASE_MASTER_HOST=$(_release_field "master" "host")
-	RELEASE_MASTER_REPO=$(_release_field "master" "repository")
-
-	RELEASE_PR_HOST=$(_release_field "pull_request" "host")
-	RELEASE_PR_REPO=$(_release_field "pull_request" "repository")
-
-	RELEASE_TAG_HOST=$(_release_field "tag" "host")
-	RELEASE_TAG_REPO=$(_release_field "tag" "repository")
-
-	RELEASE_NIGHTLY_HOST=$(_release_field "nightly" "host")
-	RELEASE_NIGHTLY_REPO=$(_release_field "nightly" "repository")
+    MASTER_FJ_HOST=$(fj_field "master" host)
+    MASTER_FJ_REPO=$(fj_field "master" repo)
 
 	# Payloads do not define host
 	# This is just for verbosity
@@ -85,18 +96,18 @@ parse_payload() {
 			;;
 	esac
 	if [ -z "$FORGEJO_HOST" ]; then
-		FORGEJO_HOST=$(jq -r ".[$FALLBACK_IDX].host" $DEFAULT_JSON)
+		FORGEJO_HOST=$(jq -r ".[$FALLBACK_IDX].host" "$DEFAULT_JSON")
 	fi
 
 	if [ -z "$FORGEJO_REPO" ]; then
-		FORGEJO_REPO=$(jq -r ".[$FALLBACK_IDX].repository" $DEFAULT_JSON)
+		FORGEJO_REPO=$(jq -r ".[$FALLBACK_IDX].repository" "$DEFAULT_JSON")
 	fi
 
 	[ -z "$FORGEJO_CLONE_URL" ] && FORGEJO_CLONE_URL="https://$FORGEJO_HOST/$FORGEJO_REPO.git"
 
 	TRIES=0
 	TIMEOUT=5
-	while ! curl -sSfL "$FORGEJO_CLONE_URL" >/dev/null 2>&1; do
+	while ! curl -fL "$FORGEJO_CLONE_URL" >/dev/null 2>&1; do
 		echo "Repository $FORGEJO_CLONE_URL is unreachable."
 		echo "Check URL or authentication."
 
@@ -124,10 +135,6 @@ parse_payload() {
 		FORGEJO_BRANCH=master
 
 		FORGEJO_BEFORE=$(jq -r '.before' $PAYLOAD_JSON)
-		echo "FORGEJO_BEFORE=$FORGEJO_BEFORE" >>"$FORGEJO_LENV"
-
-		_host="$RELEASE_MASTER_HOST"
-		_repo="$RELEASE_MASTER_REPO"
 
 		_tag="v${_timestamp}.${FORGEJO_REF}"
 		_ref="${FORGEJO_REF}"
@@ -140,16 +147,13 @@ parse_payload() {
 
 		FORGEJO_PR_NUMBER=$(jq -r '.number' $PAYLOAD_JSON)
 		FORGEJO_PR_URL=$(jq -r '.url' $PAYLOAD_JSON)
-		FORGEJO_PR_TITLE=$(.ci/common/field.py field="title" default_msg="No title provided" pull_request_number="$FORGEJO_PR_NUMBER")
+		FORGEJO_PR_TITLE=$(python3 "$ROOTDIR/.ci/common/field.py" field="title" default_msg="No title provided" pull_request_number="$FORGEJO_PR_NUMBER")
 
 		{
 			echo "FORGEJO_PR_NUMBER=$FORGEJO_PR_NUMBER"
 			echo "FORGEJO_PR_URL=$FORGEJO_PR_URL"
 			echo "FORGEJO_PR_TITLE=$FORGEJO_PR_TITLE"
 		} >>"$FORGEJO_LENV"
-
-		_host="$RELEASE_PR_HOST"
-		_repo="$RELEASE_PR_REPO"
 
 		_tag="${FORGEJO_PR_NUMBER}-${FORGEJO_REF}"
 		_ref="${FORGEJO_PR_NUMBER}-${FORGEJO_REF}"
@@ -160,32 +164,32 @@ parse_payload() {
 		FORGEJO_REF=$(jq -r '.tag' $PAYLOAD_JSON)
 		FORGEJO_BRANCH=stable
 
-		_host="$RELEASE_TAG_HOST"
-		_repo="$RELEASE_TAG_REPO"
-
 		_tag="${FORGEJO_REF}"
 		_ref="${FORGEJO_REF}"
 
 		_title="${PROJECT_PRETTYNAME} ${FORGEJO_REF}"
 		;;
 	nightly)
-		FORGEJO_BRANCH=$(jq -r ".[$FALLBACK_IDX].branch" $DEFAULT_JSON)
-		FORGEJO_REF=$(.ci/common/field.py field="sha")
-
-		_host="$RELEASE_NIGHTLY_HOST"
-		_repo="$RELEASE_NIGHTLY_REPO"
+		FORGEJO_BRANCH=$(jq -r ".[$FALLBACK_IDX].branch" "$DEFAULT_JSON")
+		FORGEJO_REF=$("$ROOTDIR/.ci/common/field.py" field="sha")
 
 		_tag="v${_timestamp}.${FORGEJO_REF}"
 		_ref="${FORGEJO_REF}"
 
+		# if last nightly was the same ref as this one, exit early
+		# TODO(crueter): gh/fj handling
+		FORGEJO_BEFORE=$(curl "https://$B2_PUBLIC_URL/latest/release.json" | jq -r '.tag_name' | cut -d'.' -f2)
+
+		if [ "$FORGEJO_BEFORE" = "$_ref" ]; then
+			echo "current ref $_ref is same as last nightly $FORGEJO_BEFORE, skipping"
+			exit 1
+		fi
+
 		_title="${PROJECT_PRETTYNAME} Nightly - $(date +"%b %d %Y")"
 		;;
 	push | test)
-		FORGEJO_BRANCH=$(jq -r ".[$FALLBACK_IDX].branch" $DEFAULT_JSON)
-		FORGEJO_REF=$(.ci/common/field.py field="sha")
-
-		_host="$RELEASE_MASTER_HOST"
-		_repo="$RELEASE_MASTER_REPO"
+		FORGEJO_BRANCH=$(jq -r ".[$FALLBACK_IDX].branch" "$DEFAULT_JSON")
+		FORGEJO_REF=$("$ROOTDIR/.ci/common/field.py" field="sha")
 
 		_tag="v${_timestamp}.${FORGEJO_REF}"
 		_ref="${FORGEJO_REF}"
@@ -204,10 +208,16 @@ parse_payload() {
 		echo "FORGEJO_REF=$FORGEJO_REF"
 		echo "FORGEJO_BRANCH=$FORGEJO_BRANCH"
 		echo "FORGEJO_CLONE_URL=$FORGEJO_CLONE_URL"
+		echo "FORGEJO_BEFORE=$FORGEJO_BEFORE"
 
-		# TODO: get rid of host
-		echo "RELEASE_HOST=$_host"
-		echo "RELEASE_REPO=$_repo"
+		echo "RELEASE_HOST=$RELEASE_HOST"
+		echo "RELEASE_REPO=$RELEASE_REPO"
+        echo "RELEASE_B2=$RELEASE_B2"
+
+        echo "B2_BUCKET=$B2_BUCKET"
+        echo "B2_DIR=$B2_DIR"
+        echo "B2_URL=$B2_URL"
+        echo "B2_PUBLIC_URL=$B2_PUBLIC_URL"
 
 		echo "RELEASE_PGO_HOST=$RELEASE_PGO_HOST"
 		echo "RELEASE_PGO_REPO=$RELEASE_PGO_REPO"
@@ -215,9 +225,12 @@ parse_payload() {
 		echo "GITHUB_TAG=$_tag"
 		echo "GITHUB_TITLE=$_title"
 		echo "ARTIFACT_REF=$_ref"
-		echo "GITHUB_DOWNLOAD=https://$_host/$_repo/releases/download"
 
-		echo "MASTER_RELEASE_URL=https://$RELEASE_MASTER_HOST/$RELEASE_MASTER_REPO/releases"
+		# TODO(crueter): Make this detect gh/b2?
+		# echo "GITHUB_DOWNLOAD=https://$RELEASE_HOST/$RELEASE_REPO/releases/download"
+		# echo "B2_DOWNLOAD=https://$B2_PUBLIC_URL/$_tag"
+
+		echo "MASTER_RELEASE_URL=https://$MASTER_FJ_HOST/$MASTER_FJ_REPO/releases"
 
 		# Package targets need this
 		echo "PROJECT_PRETTYNAME=$PROJECT_PRETTYNAME"
@@ -225,7 +238,7 @@ parse_payload() {
 }
 
 clone_repository() {
-	if ! curl -sSfL "$FORGEJO_CLONE_URL" >/dev/null 2>&1; then
+	if ! curl -fL "$FORGEJO_CLONE_URL" >/dev/null 2>&1; then
 		echo "Repository $FORGEJO_CLONE_URL is not reachable."
 		echo "Check URL or authentication."
 		echo
@@ -258,7 +271,7 @@ clone_repository() {
 
 	echo "$FORGEJO_BRANCH" > GIT-REFSPEC
 	git rev-parse --short=10 HEAD > GIT-COMMIT
-	{ git describe --tags HEAD --abbrev=0 || cat "$WORKFLOW_DIR/WORKFLOW-TAG"; } > GIT-TAG
+	{ git describe --tags HEAD --abbrev=0 || cat "$ROOTDIR/WORKFLOW-TAG"; } > GIT-TAG
 
 	if [ "$1" = "tag" ]; then
 		cp GIT-TAG GIT-RELEASE
@@ -266,6 +279,21 @@ clone_repository() {
 
 	FORGEJO_PR_MERGE_BASE=$(git merge-base master HEAD | cut -c1-10)
 	FORGEJO_LONGSHA=$(git rev-parse "$FORGEJO_REF")
+
+	if [ "$1" = "nightly" ]; then
+		# construct changelog
+		_url="https://$FORGEJO_HOST/$FORGEJO_REPO"
+		_format="- %s [\`%h\`]($_url/commit/%H)%n  - Committed on %as by %an %(trailers:key=Reviewed-on,valueonly=true,separator=)"
+		_find="Committed on (.+) by (.+) .+/pulls/([0-9]+)"
+		_replace="PR #[\3](https://git.eden-emu.dev/eden-emu/eden/pulls/\3) merged on \1 by \2"
+
+		{
+			echo "## Changelog"
+			echo
+			git log "$FORGEJO_BEFORE..$FORGEJO_REF" --pretty="$_format" | sed -E "s|$_find|$_replace|"
+			echo
+		} > "$ROOTDIR"/nightly-changelog.md
+	fi
 
 	cd ..
 

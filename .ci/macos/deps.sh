@@ -9,6 +9,7 @@ brew install --formula --quiet \
   boost \
   Catch2 \
   cmake \
+  create-dmg \
   cubeb \
   enet \
   fmt \
@@ -16,6 +17,8 @@ brew install --formula --quiet \
   hidapi \
   libtool \
   libusb \
+  lld \
+  llvm \
   lz4 \
   mbedtls@3 \
   molten-vk \

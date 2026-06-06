@@ -34,11 +34,18 @@ jobs:
         os:
           - runs-on: macos-latest
             arch: arm64
-        compiler: [universal]
+        compiler: [clang]
+
+    env:
+      TARGET: m1
+      COMPILER: clang
+
+      # TODO: force_pgo input, matrix, etc.
+      PGO_TARGET: standard
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6
 
       - name: Setup
         uses: ./.github/workflows/setup
@@ -50,16 +57,17 @@ jobs:
         run: ./.ci/macos/deps.sh
 
       - name: Configure
-        run: .ci/common/configure.sh -DCCACHE_PATH=${SCCACHE_PATH} --debug-find-pkg=OpenSSL --debug-find-pkg=WrapOpenSSLHeaders
+        run: ./.ci/common/configure.sh -DCCACHE_PATH=${SCCACHE_PATH}
 
       - name: Build
         run: cmake --build build
 
       - name: Package
-        run: ./.ci/macos/package.sh
+        run: ./.ci/macos/dmg.sh
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6.0.0
+        uses: actions/upload-artifact@v7
         with:
           name: macos
+          archive: false
           path: artifacts/*

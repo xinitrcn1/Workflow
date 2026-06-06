@@ -2,6 +2,11 @@ name: "eden-room"
 
 on:
   workflow_call:
+    inputs:
+      build-id:
+        description: 'Identifier for workflows and caching'
+        type: string
+        required: true
 
 jobs:
   alpine:
@@ -21,10 +26,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v6
 
       - name: Clone
-        uses: actions/download-artifact@v7.0.0
+        uses: actions/download-artifact@v8
         with:
           name: eden
 
@@ -51,7 +56,9 @@ jobs:
             '
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v6.0.0
+        if: ${{ inputs.build-id == 'tag' }}
+        uses: actions/upload-artifact@v7
         with:
           name: room-${{ matrix.arch }}
           path: artifacts/*
+          archive: false

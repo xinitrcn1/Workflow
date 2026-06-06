@@ -20,45 +20,36 @@
 
 ROOTDIR="$PWD"
 BUILDDIR="${BUILDDIR:-$ROOTDIR/build}"
-WORKFLOW_DIR=$(CDPATH='' cd -P -- "$(dirname -- "$0")/../.." && pwd)
 
 # shellcheck disable=SC2153
 echo "Build ID: $BUILD_ID"
 
-# check if it's called eden dir
-if [ ! -f "$ROOTDIR/CMakeLists.txt" ]; then
-	echo "error: no CMakeLists.txt found in ROOTDIR ($ROOTDIR)."
-	echo "Make sure you are running this script from the root of the Eden repository."
-	exit 1
-fi
-
-# check if common script folder is on Workflow
-if [ ! -d "$WORKFLOW_DIR/.ci/common" ]; then
-	echo "error: could not find .ci/common in Workflow at $WORKFLOW_DIR"
-	exit 1
-fi
-
-. "$WORKFLOW_DIR/.ci/common/project.sh"
-
-# annoying
-if [ "$DEVEL" = "true" ]; then
-	UPDATES=OFF
-else
-	UPDATES=ON
-fi
+. "$ROOTDIR/.ci/common/project.sh"
 
 if [ "$BUILD_ID" = nightly ]; then
 	NIGHTLY=ON
 fi
 
 # platform handling
-. "$WORKFLOW_DIR"/.ci/common/platform.sh
+. "$ROOTDIR/.ci/common/platform.sh"
 
-# sdl/arch handling (targets)
-. "$WORKFLOW_DIR"/.ci/common/targets.sh
+# SDL/arch handling (targets)
+. "$ROOTDIR/.ci/common/targets.sh"
 
 # compiler handling
-. "$WORKFLOW_DIR"/.ci/common/compiler.sh
+. "$ROOTDIR/.ci/common/compiler.sh"
+
+# Disable update checker on linux appimage
+if [ "$PLATFORM" = "linux" ]; then
+	UPDATES="${UPDATES:-OFF}"
+fi
+
+# annoying
+if [ "$DEVEL" = "true" ]; then
+	UPDATES="${UPDATES:-OFF}"
+else
+	UPDATES="${UPDATES:-ON}"
+fi
 
 # Flags all targets use
 COMMON_FLAGS=(
@@ -82,12 +73,12 @@ COMMON_FLAGS=(
 	# LTO
 	-DENABLE_LTO="${LTO:-ON}"
 
-	# many distros do not package sirit, so let's bundle it anyways
+	# Many distros do not package sirit, so let's bundle it anyways
 	-DYUZU_USE_BUNDLED_SIRIT="${SIRIT:-ON}"
 
 	# Bundled stuff (only if not building for a pkg)
+	# TODO: ffmpeg external
 	-DYUZU_USE_BUNDLED_FFMPEG="${FFMPEG:-ON}"
-	-DYUZU_USE_BUNDLED_OPENSSL="${OPENSSL:-ON}"
 
 	# macos only
 	-DYUZU_USE_BUNDLED_MOLTENVK=ON
@@ -108,6 +99,10 @@ COMMON_FLAGS=(
 	# The room functionality is bundled in now.
 	# We don't need it standalone.
 	-DYUZU_ROOM_STANDALONE=OFF
+
+	# Currently only used on auto-updater for MinGW
+	# Will probably be used for other stuff?
+	-DBUILD_ID="$BUILD_TARGET"
 
 	-DNIGHTLY_BUILD="${NIGHTLY:-OFF}"
 )

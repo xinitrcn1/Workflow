@@ -9,7 +9,7 @@
 
 ROOTDIR="$PWD"
 BUILDDIR="${BUILDDIR:-$ROOTDIR/build}"
-. .ci/common/project.sh
+. "$ROOTDIR/.ci/common/project.sh"
 ARTIFACTS_DIR="$ROOTDIR/artifacts"
 
 SHARUN="https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/refs/heads/main/useful-tools/quick-sharun.sh"
@@ -20,17 +20,27 @@ export DESKTOP="$ROOTDIR/dist/dev.eden_emu.eden.desktop"
 export OPTIMIZE_LAUNCH=1
 export DEPLOY_OPENGL=1
 export DEPLOY_VULKAN=1
-export ADD_HOOKS="wayland-is-broken.src.hook"
-export OUTPATH="$ARTIFACTS_DIR"
-export OUTNAME="${PROJECT_PRETTYNAME}-Linux-${ARTIFACT_REF}-${FULL_ARCH}.AppImage"
-UPINFO="gh-releases-zsync|eden-emulator|Releases|latest|*-${FULL_ARCH}.AppImage.zsync"
+export VERSION="${GITHUB_TAG}"
 
-if [ "$DEVEL" = 'true' ]; then
-	sed -i "s|Name=${PROJECT_PRETTYNAME}|Name=${PROJECT_PRETTYNAME} Nightly|" "$DESKTOP"
+ADD_HOOKS="wayland-is-broken.hook"
+if [ "$DEVEL" != "true" ]; then
+	ADD_HOOKS="$ADD_HOOKS:self-updater.hook"
 fi
 
-if [ "$BUILD_ID" = nightly ]; then
-	UPINFO=$(echo "$UPINFO" | sed 's/eden-emulator|Releases/Eden-CI|Nightly/g')
+export ADD_HOOKS
+export OUTPATH="$ARTIFACTS_DIR"
+export OUTNAME="${PROJECT_PRETTYNAME}-Linux-${ARTIFACT_REF}-${FULL_ARCH}.AppImage"
+
+_zsync="${PROJECT_PRETTYNAME}-Linux-${FULL_ARCH}.AppImage.zsync"
+
+# Thanks, Microsoft.
+# TODO(crueter): Proper fj/b2 handling.
+# UPINFO="zsync|https://${RELEASE_HOST}/${RELEASE_REPO}/releases/download/latest/${_zsync}"
+UPINFO="zsync|https://${B2_PUBLIC_URL}/latest/${_zsync}"
+
+# shellcheck disable=SC2153
+if [ "$BUILD_ID" = 'nightly' ]; then
+	sed -i "s|Name=${PROJECT_PRETTYNAME}|Name=${PROJECT_PRETTYNAME} Nightly|" "$DESKTOP"
 fi
 
 export UPINFO
@@ -39,7 +49,7 @@ export UPINFO
 rm -rf "$APPDIR"
 
 # deploy
-curl -L --retry 30 "$SHARUN" -o quick-sharun
+curl -fL --retry 30 "$SHARUN" -o quick-sharun
 chmod a+x quick-sharun
 ./quick-sharun \
 	"$BUILDDIR/bin/${PROJECT_REPO}" \
@@ -51,6 +61,8 @@ echo "-- Generating AppImage... --"
 
 if [ "$DEVEL" = 'true' ]; then
     rm -f "$OUTPATH/$OUTNAME.zsync"
+else
+    mv "$OUTPATH/$OUTNAME.zsync" "$OUTPATH/${_zsync}"
 fi
 
 echo "Linux package created: $OUTPATH/$OUTNAME"
